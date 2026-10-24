@@ -61,6 +61,10 @@ dsh plugin --profile desktop add D:\path\to\qqbot-supervisor
 ### 从 npm 安装（发布后）
 
 ```powershell
+# 默认（web profile）
+dsh plugin --profile web add qqbot-supervisor
+
+# 桌面版（本插件主要使用场景）
 dsh plugin --profile desktop add qqbot-supervisor
 ```
 
