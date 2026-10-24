@@ -52,7 +52,7 @@ DSH 宿主进程（Electron-as-Node）
 ### 从本地目录安装（开发/自用）
 
 ```powershell
-dsh plugin --profile desktop add D:\path\to\qqbot-supervisor
+dsh plugin --profile desktop add <本地插件目录路径>
 ```
 
 `dsh plugin add` 会：写入 `dependencies`（`link:` 本地路径）→ 追加到 `dsh.profile.bundles` → 跑 pnpm 安装依赖。
