@@ -1,0 +1,9 @@
+# qqbot-supervisor：把 qq-bridge 这个外部进程交给 DSH 宿主托管。
+# 这里插入一条 loader 行；name 是包名（profile 目录下用 node_modules junction 解析）。
+- insert:
+    - id: qqbot-supervisor
+      name: qqbot-supervisor
+      config:
+        bridgeDir: 'D:\Software\QQBot\qq-bridge'
+        consolePort: 3100
+        autoStart: true
