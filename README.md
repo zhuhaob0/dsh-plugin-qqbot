@@ -84,8 +84,8 @@ dsh plugin --profile desktop remove qqbot-supervisor
 |---|---|---|---|
 | `enabled` | boolean | `true` | **总开关**：取消勾选会立即停掉 SnowLuma 与桥接，勾上则重新拉起 |
 | `manageSnowLuma` | boolean | `true` | 是否托管 SnowLuma。关闭后只托管 qq-bridge（适合你自己管理 SnowLuma 的场景） |
-| `bridgeDir` | string | `D:\Software\QQBot\qq-bridge` | qq-bridge 所在目录 |
-| `snowLumaDir` | string | `D:\Software\QQBot\SnowLuma-v2.1.1` | SnowLuma 所在目录（内部使用其中的 `node.exe`） |
+| `bridgeDir` | string | `<你的 qq-bridge 目录>` | qq-bridge 所在目录，**必须改成本机实际路径** |
+| `snowLumaDir` | string | `<你的 SnowLuma 目录>` | SnowLuma 所在目录（内部使用其中的 `node.exe`），**必须改成本机实际路径** |
 | `consolePort` | number | `3100` | 桥接控制台端口（用于判断桥接是否已在外运行） |
 | `snowLumaPort` | number | `3001` | SnowLuma OneBot WS 端口（用于判断是否已就绪） |
 
@@ -153,7 +153,7 @@ if (now !== lastEnabled) {
 插件日志落在 `bridgeDir/state/launcher/plugin.log`（宿主 stderr 在桌面版里看不到，所以单独落盘）：
 
 ```powershell
-Get-Content 'D:\Software\QQBot\qq-bridge\state\launcher\plugin.log' -Tail 30
+Get-Content '<你的 bridgeDir>\state\launcher\plugin.log' -Tail 30
 ```
 
 常见日志：
