@@ -355,6 +355,7 @@ adb devices                   # 状态应为 device，不是 unauthorized
 - **`setup-dsh.mjs` 可能覆盖 preset 提示词**：重跑后要检查第 10.4 节的修改是否还在
 - **敏感操作一律人工确认**：支付、密码、验证码、转账、退款不要交给模型
 - **adb 权限极大**：建议用备用机/独立账号；`phone_shell` 等于手机上的 shell
+- **语音识别是独立依赖**：需要 Python + sensevoice 模型（见 10.8），没装时语音只会显示成 `[语音]`。
 - **`phone-mcp` v1.0.0 的 QQ 空间工具开箱即坏**（`loadSnowlumaToken` / `resolveImage` 均未定义），
   需按 10.5、10.6 打补丁：前者让 `qzone_*` 能调通 SnowLuma，后者让配图可用
   （纯文字正常、带图必崩是典型症状）
@@ -380,6 +381,7 @@ adb devices                   # 状态应为 device，不是 unauthorized
 | 12 |（手机）群里让它开 App | 拒绝（提示词层先拦，执行层 guard 兜底） |
 | 13 |（手机）看自己的 QQ 空间 | 能读到说说列表（需 10.5 补丁） |
 | 14 |（手机）发带图的说说 | 图片随说说上传成功（需 10.6 补丁） |
+| 15 |（语音）私聊发一条语音 | 机器人能接住内容（需 10.8 本地 ASR） |
 
 ---
 
@@ -635,56 +637,94 @@ function postRateCheck() {
 **验证**：连续触发第 3 次发布，应返回「说说每 24 小时最多 2 条」而不再真正发出。
 
 **回滚**：恢复 `phone-mcp.js.bak-postlimit`；提示词恢复 `agent.cordis.yml.bak-qzone-post` 后重新生成。
-### 10.8 `src/bridge.js` — 收到的语音自动转文字
+### 10.8 `src/bridge.js` — 收到的语音转文字（本地 ASR）
 
-**背景**：QQ 里发来的语音，桥接原本只渲染成占位符 `[语音]`，模型既听不到内容、也不知道对方说了什么。
-SnowLuma 提供了 `fetch_ptt_text` 动作（`{ message_id }` → `{ text }`，走 QQ 侧语音转写），
-但桥接只在「校验自己发出的语音」时用过它。
+**背景**：QQ 发来的语音，桥接原本只渲染成 `[语音]`，模型完全不知道对方说了什么。
 
-**改动**：
-
-1. `segmentsToText()` 的 `record` 分支改为：
-   ```js
-   case 'record': {
-     let ptt = ''
-     try { ptt = options.resolvePtt ? await options.resolvePtt(options.messageId, d) : '' } catch { ptt = '' }
-     out.push(ptt ? '[语音：' + ptt + ']' : '[语音]')
-     break
-   }
-   ```
-2. `handleIncoming()` 里定义 `resolvePtt`，内部调用 `onebotHttpAction('fetch_ptt_text', { message_id })`，
-   并把 `{ resolvePtt, messageId: event.message_id }` 传给两处 `segmentsToText` 调用
-
-**效果**：对方发语音后，模型看到的是 `[语音：今天下午三点开会]` 而不是 `[语音]`；
-拿不到转写（比如自己发的语音、或 QQ 侧还没生成）时自动退回 `[语音]`，不阻塞消息处理。
-
-**实测结论（2026-10-25）**：这条链路在**本账号上不可用**。
+**先试过 QQ 侧转写，走不通**：SnowLuma 有 `fetch_ptt_text`（内部走 QQ 的 `pttTrans` 协议），
+但实测对**个人号路线**一律失败：
 
 ```
-[ptt] 语音转写失败：OneBot HTTP fetch_ptt_text 失败: ptt translate failed: error=9
+ptt translate errCode=9  isGroup=false  md5=16B  format=1  uuid=set  dur=6  size=11191
 [ptt] 语音转写失败：The operation was aborted due to timeout
 SnowLuma: Error: 语音转文字超时（未收到结果推送）
 ```
 
-SnowLuma 的实现要求先缓存语音媒体，再调 QQ 的 `translatePttToText`，然后**等 QQ 推送转写结果**；
-实测 QQ 直接返回 `error=9`，重试则“未收到结果推送”。属于服务侧限制，不是配置问题。
+参数完整（md5/uuid/size 都有），2 秒和 6 秒的语音都返回 `errCode=9`，重试则等不到 QQ 的推送。
+这是路线问题：官方 QQ 机器人平台自带 `asr_refer_text`，而 OneBot（NapCat / Lagrange / SnowLuma）
+没有这层，必须自己做 ASR。
 
-因此该功能**默认关闭**（否则每条语音白卡 5 秒还拖慢消息处理）。需要时可开：
+**最终方案（全本地，零 API 费用）**：
 
-```powershell
-$env:QQ_PTT_TRANSCRIBE = '1'      # 或在 config.json 设 socialV2.voice.transcribeIncoming = true
+```
+QQ 语音（SILK）
+  → SnowLuma get_record(out_format=wav)     # 它的 ffmpeg 带 SILK 解码器
+  → 临时 wav
+  → python transcribe.py --model-dir <SenseVoice>  --json
+  → [语音：今天下午3点开会，记得带电脑和充电器。]
 ```
 
-**若确实要听懂语音**，可行路线是**本地 ASR**：把语音文件下载下来跑 whisper.cpp / faster-whisper
-（离线、不依赖 QQ 服务），代价是要装模型（几百 MB）并加一个转写步骤。云 ASR API 也可以，但需要 key。
+`segmentsToText()` 的 `record` 分支改为调用 `options.resolvePtt(messageId, seg)`，
+`handleIncoming()` 里实现它：`get_record` 拿 base64 wav → 写临时文件 → `execFile` 跑 python → 解析 JSON。
 
-**注意**：
+### 前置依赖（一次性）
 
-- 转写依赖 **QQ 侧**的语音识别结果，不是本地 ASR；网络/服务异常时拿不到文本
-- 只对**收到的**语音有效；自己发出去的语音实测 `retcode=100（消息中不包含语音）`
-- 每条语音会多一次本地 HTTP 请求（毫秒级），失败不影响消息投递
+```powershell
+# 1) Python 3.10+（本机 3.14.4）+ 依赖
+python -m pip install -i https://mirrors.aliyun.com/pypi/simple sherpa-onnx numpy
 
-**回滚**：恢复 `bridge.js.bak-ptt`。
+# 注意：requirements.txt 里的 pilk（SILK 解码）在 3.14 上没有预编译包、本机也没 Rust，
+#       编译会失败。但我们走的是 SnowLuma 转码 wav，不需要 pilk，跳过即可。
+
+# 2) SenseVoice 模型（约 163 MB 压缩包 → 239 MB int8 模型）
+curl -LO https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2
+tar -xjf sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2
+# 目录里要有 model.int8.onnx + tokens.txt
+```
+
+**路径约定**（可用环境变量覆盖）：
+
+| 用途 | 默认 | 环境变量 |
+|---|---|---|
+| python 解释器 | `python` | `VOICE_TRANSCRIBE_PYTHON` |
+| 转写脚本 | `E:\Code\thirdparty\dsh-voice-transcribe\py\transcribe.py` | `VOICE_TRANSCRIBE_SCRIPT` |
+| 模型目录 | `…\models\sherpa-onnx-sense-voice-…` | `VOICE_TRANSCRIBE_MODEL_DIR` |
+
+**开关**（默认关闭）：
+
+```jsonc
+// config.json
+"socialV2": { "voice": { "transcribeIncoming": true } }
+```
+
+或环境变量 `QQ_PTT_TRANSCRIBE=1`。
+
+### 两个必须注意的坑
+
+**① Windows 上 Python 默认按 GBK 输出** —— Node 按 UTF-8 读就会得到满屏乱码（实测踩过）。
+必须强制：
+
+```js
+env.PYTHONIOENCODING = 'utf-8'
+env.PYTHONUTF8 = '1'
+execFile(py, ['-X', 'utf8', script, …])
+```
+
+**② ffmpeg 不在 PATH 时转码会失败** —— 把 `socialV2.voice.ffmpegPath` 或 `FFMPEG` 环境变量
+注入给子进程（桥接已做：`env.FFMPEG / env.FFPROBE`）。
+
+### 验证
+
+```powershell
+# 用一段已知内容的音频测（Windows 自带 TTS 即可生成）
+python -X utf8 py\transcribe.py test.wav --model-dir <模型目录> --json
+# → {"ok":true,"text":"今天下午3点开会，记得带电脑和充电器。","sec":1.2,…}
+```
+
+实测识别“今天下午三点开会，记得带电脑和充电器”：只差数字写法（三→3）和句号，语义完全正确，
+推理约 **1.2 秒/条**（模型加载 1 秒，之后常驻）。
+
+**回滚**：恢复 `bridge.js.bak-ptt2`，并在 config.json 关掉 `transcribeIncoming`。
 ## 11. 安全与合规
 
 - **白名单优先**：`allowAllWhenEmpty=false` + 显式列出私聊/群；`deny` 优先级更高。
