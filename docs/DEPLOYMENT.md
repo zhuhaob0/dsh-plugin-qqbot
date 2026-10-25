@@ -658,6 +658,26 @@ SnowLuma 提供了 `fetch_ptt_text` 动作（`{ message_id }` → `{ text }`，�
 **效果**：对方发语音后，模型看到的是 `[语音：今天下午三点开会]` 而不是 `[语音]`；
 拿不到转写（比如自己发的语音、或 QQ 侧还没生成）时自动退回 `[语音]`，不阻塞消息处理。
 
+**实测结论（2026-10-25）**：这条链路在**本账号上不可用**。
+
+```
+[ptt] 语音转写失败：OneBot HTTP fetch_ptt_text 失败: ptt translate failed: error=9
+[ptt] 语音转写失败：The operation was aborted due to timeout
+SnowLuma: Error: 语音转文字超时（未收到结果推送）
+```
+
+SnowLuma 的实现要求先缓存语音媒体，再调 QQ 的 `translatePttToText`，然后**等 QQ 推送转写结果**；
+实测 QQ 直接返回 `error=9`，重试则“未收到结果推送”。属于服务侧限制，不是配置问题。
+
+因此该功能**默认关闭**（否则每条语音白卡 5 秒还拖慢消息处理）。需要时可开：
+
+```powershell
+$env:QQ_PTT_TRANSCRIBE = '1'      # 或在 config.json 设 socialV2.voice.transcribeIncoming = true
+```
+
+**若确实要听懂语音**，可行路线是**本地 ASR**：把语音文件下载下来跑 whisper.cpp / faster-whisper
+（离线、不依赖 QQ 服务），代价是要装模型（几百 MB）并加一个转写步骤。云 ASR API 也可以，但需要 key。
+
 **注意**：
 
 - 转写依赖 **QQ 侧**的语音识别结果，不是本地 ASR；网络/服务异常时拿不到文本
