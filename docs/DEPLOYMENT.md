@@ -355,8 +355,9 @@ adb devices                   # 状态应为 device，不是 unauthorized
 - **`setup-dsh.mjs` 可能覆盖 preset 提示词**：重跑后要检查第 10.4 节的修改是否还在
 - **敏感操作一律人工确认**：支付、密码、验证码、转账、退款不要交给模型
 - **adb 权限极大**：建议用备用机/独立账号；`phone_shell` 等于手机上的 shell
-- **`phone-mcp` v1.0.0 的 QQ 空间工具开箱即坏**（`loadSnowlumaToken is not defined`），
-  需按 10.5 打补丁，否则 `qzone_*` 全部报错（与 token、SnowLuma 状态无关）
+- **`phone-mcp` v1.0.0 的 QQ 空间工具开箱即坏**（`loadSnowlumaToken` / `resolveImage` 均未定义），
+  需按 10.5、10.6 打补丁：前者让 `qzone_*` 能调通 SnowLuma，后者让配图可用
+  （纯文字正常、带图必崩是典型症状）
 - 手机工具只在 owner 私聊与桌面会话出现，群里连试都不该试（提示词 + 执行层双层拦截）
 - **已知残余风险（当前接受）**：身份闸门依赖 `qqbot-supervisor` 插件。若插件被停用、而桥接/SnowLuma
   仍在外部运行（`external` 认领状态不会被 dispose 杀掉），预设里的 guard 因拿不到会话上下文而无法校验身份，
@@ -378,6 +379,7 @@ adb devices                   # 状态应为 device，不是 unauthorized
 | 11 |（手机）owner 私聊让它开 App | 能打开，日志有 `key=private:<ownerQQ>` |
 | 12 |（手机）群里让它开 App | 拒绝（提示词层先拦，执行层 guard 兜底） |
 | 13 |（手机）看自己的 QQ 空间 | 能读到说说列表（需 10.5 补丁） |
+| 14 |（手机）发带图的说说 | 图片随说说上传成功（需 10.6 补丁） |
 
 ---
 
@@ -398,7 +400,7 @@ adb devices                   # 状态应为 device，不是 unauthorized
 
 ---
 
-## 10. 源码修改清单（共 5 处）
+## 10. 源码修改清单（共 6 处）
 
 ### 10.1 `src/bridge.js` — 支持 `DSH_BASE_URL` 环境变量
 
@@ -539,6 +541,58 @@ Authorization: Bearer <config.json 的 snowluma.accessToken>
 
 > ⚠️ 这是**第三方包**的缺陷修复：升级 `ai-companion-kit` / `phone-mcp` 后补丁会丢失，需重新应用。
 > 另外注意 `snowluma.accessToken` 是 OneBot **HTTP** 令牌（不是 WS 令牌）。
+### 10.6 `<phone-mcp>/src/phone-mcp.js` — 补 `resolveImage`（第三方包缺陷，带图必崩）
+
+**现象**：发说说带配图时失败（纯文字正常）。同文件里 `video_frames` 传本地视频也一样报错：
+
+```
+Error: ReferenceError: resolveImage is not defined
+```
+
+**根因**：`qzone_post`（第 ~1075 行）与 `video_frames`（第 ~886 行）都调用 `resolveImage(...)`，
+但 v1.0.0 包里没有这个函数的定义——与 10.5 是同一类缺陷（引用了未实现的辅助函数）。
+
+**SnowLuma 侧要求**（读 `index.mjs` 的 action 定义确认）：`send_qzone_msg.images`
+接受 `file://`、`http://`、`base64://` 三种形式并自动上传；**裸 Windows 路径不被接受**。
+
+**修复**：
+
+```js
+import { pathToFileURL } from 'node:url'
+
+function resolveImage(input) {
+  const raw = String(input ?? '').trim()
+  if (!raw) return { error: '路径为空' }
+  if (/^(https?:\/\/|base64:\/\/|file:\/\/)/i.test(raw)) return { file: raw, url: raw }
+  const cands = path.isAbsolute(raw) ? [raw] : [path.join(SHOT_DIR, raw), …]
+  for (const c of cands) {
+    if (fs.existsSync(c) && fs.statSync(c).isFile()) {
+      const abs = path.resolve(c)
+      return { file: abs, url: pathToFileURL(abs).href }   // file 给 ffmpeg，url 给 SnowLuma
+    }
+  }
+  return { error: '文件不存在：' + cands[0] }
+}
+```
+
+并把 `qzone_post` 里的 `files.push(r.file)` 改为 `files.push(r.url || r.file)`。
+
+**为什么返回两个字段**：`video_frames` 把结果直接喂给 ffmpeg（需要文件系统路径），
+而 `send_qzone_msg` 需要 `file://` URL —— 两种消费者要求不同，所以同时给 `file` 和 `url`。
+
+**验证**：
+
+```powershell
+# file:// URL 形如（Windows 三斜杠 + 正斜杠）
+file:///C:/Users/<you>/AppData/Local/Temp/phone-mcp-shots/shot-xxx.png
+```
+
+修复后：先 `phone_screenshot` 截图，再 `qzone_post(content, images=["shot-xxx.png"])`
+（文件名相对 `PHONE_SHOT_DIR` 解析），图片随说说一起上传。
+
+**回滚**：恢复 `phone-mcp.js.bak-qzone2`。
+
+> ⚠️ 同样是第三方包缺陷：升级 `phone-mcp` 后补丁丢失，需重新应用。
 ## 11. 安全与合规
 
 - **白名单优先**：`allowAllWhenEmpty=false` + 显式列出私聊/群；`deny` 优先级更高。
