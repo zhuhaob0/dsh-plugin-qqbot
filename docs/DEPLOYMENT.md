@@ -400,7 +400,7 @@ adb devices                   # 状态应为 device，不是 unauthorized
 
 ---
 
-## 10. 源码修改清单（共 6 处）
+## 10. 源码修改清单（共 7 处）
 
 ### 10.1 `src/bridge.js` — 支持 `DSH_BASE_URL` 环境变量
 
@@ -593,6 +593,45 @@ file:///C:/Users/<you>/AppData/Local/Temp/phone-mcp-shots/shot-xxx.png
 **回滚**：恢复 `phone-mcp.js.bak-qzone2`。
 
 > ⚠️ 同样是第三方包缺陷：升级 `phone-mcp` 后补丁丢失，需重新应用。
+### 10.7 `<phone-mcp>/src/phone-mcp.js` — 说说硬限流（每 24 小时 2 条）
+
+**背景**：启用「自主发说说」后，仅靠提示词约束不可靠——模型可能多发、或在同一天反复发。
+所以除了提示词规则，代码层再加一道硬限制。
+
+**改动**：
+
+```js
+const POST_LIMIT = { perDay: Math.max(1, Number(process.env.PHONE_QZONE_POST_PER_DAY) || 2), hits: [] }
+
+function postRateCheck() {
+  const dayAgo = Date.now() - 24 * 3600 * 1000
+  POST_LIMIT.hits = POST_LIMIT.hits.filter((t) => t > dayAgo)
+  if (POST_LIMIT.hits.length >= POST_LIMIT.perDay) {
+    return '【限流】说说每 24 小时最多 ' + POST_LIMIT.perDay + ' 条，已经发完了'
+  }
+  return null
+}
+```
+
+- `qzone_post` 开头先 `postRateCheck()`，命中直接返回限流文案
+- 发送成功后再 `POST_LIMIT.hits.push(Date.now())`（失败不计数）
+- **只影响发说说**：点赞/看动态仍走原来的 `QZONE_LIMIT`（每分钟 3 次、每天 20 次），不受影响
+- 想改成别的额度：设环境变量 `PHONE_QZONE_POST_PER_DAY`（默认 2）
+
+**配合的提示词规则**（10.4 的文件里，已加入权威源并重新生成）：
+
+```
+【发说说（自主，但克制）】
+- 你可以自己想发就发一条 QQ 空间说说：想到好玩的事、看到有意思的东西、或刚发生了一件值得记下来的小事。
+- 频率：每 24 小时最多 2 条（工具层在第 3 条时会直接拒绝）；宁可少发，不要为了刷存在感而发。
+- 不发：负面情绪发泄、个人隐私（位置/公司/学校/真实姓名/电话/证件）、争议敏感受众话题、别人的隐私或未经同意发布的照片。
+- 配图：优先用刚截的手机截图（先 phone_screenshot，再用返回的文件名），或 https 图片链接；没有合适的图就发纯文字。
+- 发完不必特意宣告；owner 问起再说明。
+```
+
+**验证**：连续触发第 3 次发布，应返回「说说每 24 小时最多 2 条」而不再真正发出。
+
+**回滚**：恢复 `phone-mcp.js.bak-postlimit`；提示词恢复 `agent.cordis.yml.bak-qzone-post` 后重新生成。
 ## 11. 安全与合规
 
 - **白名单优先**：`allowAllWhenEmpty=false` + 显式列出私聊/群；`deny` 优先级更高。
