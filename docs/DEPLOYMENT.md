@@ -315,11 +315,17 @@ adb devices                   # 状态应为 device，不是 unauthorized
 
 ### 7.5.3 打开 QQ 侧通道 + owner 闸门（两处源码，见第 10 节）
 
-1. `qq-tool-restrict.mjs` 的 `SAFE_PREFIXES` 加入 `'mcp__phone__'`（放行前缀）
-2. 同一文件的 `phoneToolDenial()` 按会话身份收一道：**只有 `private:<ownerQQ>` 放行**
-3. `qq-chat-v2.patch.yml` 提示词加「管理员私聊例外」（否则模型会按旧规则回答“我没有本地工具”）
+1. `qq-tool-restrict.mjs` 的 `SAFE_PREFIXES` 加入 `'mcp__phone__'`（放行前缀，否则手机工具在 QQ 会话里一律被拒）
+2. 提示词加「管理员私聊例外」（`dsh/agent-presets/qq-chat-v2/agent.cordis.yml`，见 10.4）
+3. **owner 身份闸门**由 `qqbot-supervisor` 插件实现（agent 级 `tools.guard`）
 
-> 只做第 1 步等于**对白名单里所有人开放手机**——第 2 步是必须的，且默认拒绝（查不到身份就拒）。
+> ⚠️ 只做 1+2 等于**对白名单里所有人开放手机**——第 3 步是必须的。
+
+**为什么身份闸门必须在插件里**：预设里的 guard 拿到的 `exec` 只有 `{ name }`，
+不含会话信息（实测日志 `[phone-guard] exec={name}`），无法判断调用方是谁；
+只有注册在 `agent.ctx` 上的 guard 才能拿到 `agent.id` 去反查会话身份。
+因此 `qq-tool-restrict.mjs` 里的 `phoneToolDenial()` 只作为补充：仅当上下文确实带会话 ID 时才校验，
+否则放行（避免误伤 owner），由插件兜底。
 
 ### 7.5.4 权限矩阵
 
@@ -350,6 +356,9 @@ adb devices                   # 状态应为 device，不是 unauthorized
 - **敏感操作一律人工确认**：支付、密码、验证码、转账、退款不要交给模型
 - **adb 权限极大**：建议用备用机/独立账号；`phone_shell` 等于手机上的 shell
 - 手机工具只在 owner 私聊与桌面会话出现，群里连试都不该试（提示词 + 执行层双层拦截）
+- **已知残余风险（当前接受）**：身份闸门依赖 `qqbot-supervisor` 插件。若插件被停用、而桥接/SnowLuma
+  仍在外部运行（`external` 认领状态不会被 dispose 杀掉），预设里的 guard 因拿不到会话上下文而无法校验身份，
+  此时白名单内的 QQ 会话都能调用手机工具。缓解办法：保持插件常开；或接入前先确认桥接已停。
 ## 8. 验收清单
 
 | # | 检查项 | 期望 |
@@ -432,8 +441,13 @@ adb devices                   # 状态应为 device，不是 unauthorized
 **改动**：
 
 1. `SAFE_PREFIXES` 增加 `'mcp__phone__'`（否则手机工具在 QQ 会话里一律被白名单拒绝）
-2. 新增 `loadPhoneIdentity()` / `phoneToolDenial()`，并把已有 `ctx.tools.guard()` 改成：
-   白名单通过后，手机工具再过一道身份校验 —— 只有 `private:<ownerQQ>` 放行，查不到身份直接拒绝
+2. 新增 `loadPhoneIdentity()` / `safeGet()` / `resolveSessionId()` / `phoneToolDenial()`，
+   并把已有 `ctx.tools.guard()` 改成：白名单通过后，手机工具再过一道身份校验
+
+**已知能力边界（实测）**：该 guard 的 `exec` 只带 `{ name }`，拿不到会话 ID，
+所以这里的身份校验**只在上下文恰好带 `session.id` 时才生效**；拿不到时放行并写诊断
+（`state/tool-restrict.log` 的 `[phone-guard] exec={…}`），由插件的 agent 级 guard 兜底。
+`ctx` 是 cordis 服务代理，读取未 `inject` 的属性会抛错，故所有 ctx 访问都走 `safeGet()`。
 
 **原因**：手机工具是「能操作实机」的高危能力，前缀一放行就等于对白名单里所有人开放。
 把闸门放在这个守卫里（而不是插件里）的好处是：它随 QQ 会话一起加载，
@@ -443,7 +457,7 @@ adb devices                   # 状态应为 device，不是 unauthorized
 
 **回滚**：恢复 `qq-tool-restrict.mjs.bak-owner`（或删掉 `phoneToolDenial` 调用）。
 
-### 10.4 `plugins/qq-agent-presets/presets/qq-chat-v2.patch.yml` — 提示词加「管理员私聊例外」
+### 10.4 `dsh/agent-presets/qq-chat-v2/agent.cordis.yml` — 提示词加「管理员私聊例外」
 
 **改动**：在安全规则第 1 条「你没有本地工具……工具不存在就是不存在」之后补一段例外：
 
@@ -453,6 +467,14 @@ adb devices                   # 状态应为 device，不是 unauthorized
 
 **原因**：只放开白名单不够 —— 模型读到「你没有本地工具」就会直接回答“我伸不出手”，
 哪怕工具已经在工具表里。实测现象：工具可见、会话里有 33 个 `mcp__phone__*`，模型仍拒绝。
+
+> ⚠️ **必须改权威源，不要直接改生成物**。
+> `plugins/qq-agent-presets/presets/*.patch.yml` 是 `build-agent-preset-patches.mjs`
+> 从上面的 `agent.cordis.yml` **生成**的，直接改会在下一次生成时被覆盖（实测已踩过）。
+>
+> 正确流程：改权威源 → `node scripts/build-agent-preset-patches.mjs` → 用 `--check` 确认一致。
+> 该命令只在**手动**执行 `node scripts/setup-dsh.mjs <profile>` 或单独跑 build 时触发，
+> DSH 自身不会自动重新生成。
 
 **回滚**：恢复 `qq-chat-v2.patch.yml.bak-phone`。
 

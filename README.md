@@ -200,7 +200,8 @@ foreach ($p in 3001,3100) { "$p : " + (Test-NetConnection 127.0.0.1 -Port $p -In
 1. **关掉 DSH 桌面版 = 机器人下线**。这是“宿主托管”的固有代价；想常驻请改用 `dsh web` 作为宿主。
 2. 不托管 **DSH 自身**（插件不可能托管宿主），也不托管 qq-bridge 提供的 3 个 MCP server（那由 profile 的 `cordis.patch.yml` 管理）。
 3. SnowLuma 是第三方带原生组件的客户端，本插件只做**本地启动/停止**，不分发、不修改它；使用时请遵守其 EULA。
-4. 宿主端口探测有一层兜底依赖 `process._getActiveHandles()`（Node 已标记废弃，但目前可用）；若未来失效，可在配置里固定 `hostPort`。
+4. **手机工具的 owner 闸门依赖本插件**：插件停用但桥接仍在外部运行时，预设侧 guard 拿不到会话上下文，无法校验身份，此时白名单内的 QQ 会话可调用手机工具。建议保持插件常开。
+5. 宿主端口探测有一层兜底依赖 `process._getActiveHandles()`（Node 已标记废弃，但目前可用）；若未来失效，可在配置里固定 `hostPort`。
 
 ## 目录结构
 
