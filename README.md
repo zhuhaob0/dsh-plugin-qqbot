@@ -38,6 +38,7 @@ DSH 宿主进程（Electron-as-Node）
 
 > 📘 从零部署的完整流程（Node / qq-bridge / SnowLuma / DSH 端 preset 与 MCP / 验收 / 排错 / 源码修改清单）
 > 见 **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**。
+> 遇到问题先查 **[docs/PITFALLS.md](docs/PITFALLS.md)**（按症状索引的排错手册）。
 
 ## 前置条件
 

@@ -387,6 +387,8 @@ adb devices                   # 状态应为 device，不是 unauthorized
 
 ## 9. 常见故障排查
 
+> 更完整的**按症状索引**版本（含 DSH 插件、编码、权限等章节）见 **[PITFALLS.md](PITFALLS.md)**。
+
 | 现象 | 原因 | 处理 |
 |---|---|---|
 | QQ 上完全没反应 | 白名单为空 + `allowAllWhenEmpty=false` | 填 `allow.private` / `allow.groups` |
