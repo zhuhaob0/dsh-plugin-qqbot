@@ -400,7 +400,7 @@ adb devices                   # 状态应为 device，不是 unauthorized
 
 ---
 
-## 10. 源码修改清单（共 7 处）
+## 10. 源码修改清单（共 8 处）
 
 ### 10.1 `src/bridge.js` — 支持 `DSH_BASE_URL` 环境变量
 
@@ -635,6 +635,36 @@ function postRateCheck() {
 **验证**：连续触发第 3 次发布，应返回「说说每 24 小时最多 2 条」而不再真正发出。
 
 **回滚**：恢复 `phone-mcp.js.bak-postlimit`；提示词恢复 `agent.cordis.yml.bak-qzone-post` 后重新生成。
+### 10.8 `src/bridge.js` — 收到的语音自动转文字
+
+**背景**：QQ 里发来的语音，桥接原本只渲染成占位符 `[语音]`，模型既听不到内容、也不知道对方说了什么。
+SnowLuma 提供了 `fetch_ptt_text` 动作（`{ message_id }` → `{ text }`，走 QQ 侧语音转写），
+但桥接只在「校验自己发出的语音」时用过它。
+
+**改动**：
+
+1. `segmentsToText()` 的 `record` 分支改为：
+   ```js
+   case 'record': {
+     let ptt = ''
+     try { ptt = options.resolvePtt ? await options.resolvePtt(options.messageId, d) : '' } catch { ptt = '' }
+     out.push(ptt ? '[语音：' + ptt + ']' : '[语音]')
+     break
+   }
+   ```
+2. `handleIncoming()` 里定义 `resolvePtt`，内部调用 `onebotHttpAction('fetch_ptt_text', { message_id })`，
+   并把 `{ resolvePtt, messageId: event.message_id }` 传给两处 `segmentsToText` 调用
+
+**效果**：对方发语音后，模型看到的是 `[语音：今天下午三点开会]` 而不是 `[语音]`；
+拿不到转写（比如自己发的语音、或 QQ 侧还没生成）时自动退回 `[语音]`，不阻塞消息处理。
+
+**注意**：
+
+- 转写依赖 **QQ 侧**的语音识别结果，不是本地 ASR；网络/服务异常时拿不到文本
+- 只对**收到的**语音有效；自己发出去的语音实测 `retcode=100（消息中不包含语音）`
+- 每条语音会多一次本地 HTTP 请求（毫秒级），失败不影响消息投递
+
+**回滚**：恢复 `bridge.js.bak-ptt`。
 ## 11. 安全与合规
 
 - **白名单优先**：`allowAllWhenEmpty=false` + 显式列出私聊/群；`deny` 优先级更高。
