@@ -355,6 +355,8 @@ adb devices                   # 状态应为 device，不是 unauthorized
 - **`setup-dsh.mjs` 可能覆盖 preset 提示词**：重跑后要检查第 10.4 节的修改是否还在
 - **敏感操作一律人工确认**：支付、密码、验证码、转账、退款不要交给模型
 - **adb 权限极大**：建议用备用机/独立账号；`phone_shell` 等于手机上的 shell
+- **`phone-mcp` v1.0.0 的 QQ 空间工具开箱即坏**（`loadSnowlumaToken is not defined`），
+  需按 10.5 打补丁，否则 `qzone_*` 全部报错（与 token、SnowLuma 状态无关）
 - 手机工具只在 owner 私聊与桌面会话出现，群里连试都不该试（提示词 + 执行层双层拦截）
 - **已知残余风险（当前接受）**：身份闸门依赖 `qqbot-supervisor` 插件。若插件被停用、而桥接/SnowLuma
   仍在外部运行（`external` 认领状态不会被 dispose 杀掉），预设里的 guard 因拿不到会话上下文而无法校验身份，
@@ -375,6 +377,7 @@ adb devices                   # 状态应为 device，不是 unauthorized
 | 10 |（插件）`qqbot_status` | `state: ready`，含 snowluma 状态 |
 | 11 |（手机）owner 私聊让它开 App | 能打开，日志有 `key=private:<ownerQQ>` |
 | 12 |（手机）群里让它开 App | 拒绝（提示词层先拦，执行层 guard 兜底） |
+| 13 |（手机）看自己的 QQ 空间 | 能读到说说列表（需 10.5 补丁） |
 
 ---
 
@@ -395,7 +398,7 @@ adb devices                   # 状态应为 device，不是 unauthorized
 
 ---
 
-## 10. 对 qq-bridge 源码的修改（共 4 处）
+## 10. 源码修改清单（共 5 处）
 
 ### 10.1 `src/bridge.js` — 支持 `DSH_BASE_URL` 环境变量
 
@@ -479,6 +482,63 @@ adb devices                   # 状态应为 device，不是 unauthorized
 **回滚**：恢复 `qq-chat-v2.patch.yml.bak-phone`。
 
 > ⚠️ `node scripts/setup-dsh.mjs <profile>` 会重新生成/覆盖 preset，重跑后需检查 10.3 与 10.4 是否还在。
+### 10.5 `<phone-mcp>/src/phone-mcp.js` — 补 `loadSnowlumaToken` / `SNOWLUMA_HTTP`（第三方包缺陷）
+
+**现象**：QQ 空间相关工具（`qzone_post` / `qzone_my_posts` / `qzone_like` / `qzone_comment` / `qzone_feeds`）
+全部失败，工具返回：
+
+```
+Error: 看说说失败：loadSnowlumaToken is not defined
+```
+
+**根因**：`phone-mcp` v1.0.0 里 `snowluma(action, payload)` 使用了两个符号，
+但包内既没有定义、也没有从 `ncm.js` 导出：
+
+```js
+async function snowluma(action, payload) {
+  const token = loadSnowlumaToken();            // 未定义
+  const res = await fetch(SNOWLUMA_HTTP + '/' + action, …)   // 未定义
+}
+```
+
+所以与 token 是否正确、SnowLuma 是否在线都无关——直接 ReferenceError。
+
+**修复**（在同文件「可选配置」段上方新增）：
+
+```js
+const SNOWLUMA_HTTP = process.env.PHONE_SNOWLUMA_HTTP || 'http://127.0.0.1:3000'
+
+function loadSnowlumaToken() {
+  if (process.env.PHONE_SNOWLUMA_TOKEN) return process.env.PHONE_SNOWLUMA_TOKEN
+  const cfg = process.env.PHONE_BRIDGE_CONFIG || '<默认 bridge config.json>'
+  try { return String(JSON.parse(fs.readFileSync(cfg, 'utf8'))?.snowluma?.accessToken ?? '') }
+  catch { return '' }
+}
+```
+
+**配套配置**（profile 的 `cordis.patch.yml`，`mcp-phone` 行的 `env`）：
+
+```yaml
+env:
+  PHONE_ADB: 'D:\dev_tools\platform-tools\adb.exe'
+  PHONE_SNOWLUMA_HTTP: 'http://127.0.0.1:3000'
+  PHONE_BRIDGE_CONFIG: 'D:\Software\QQBot\qq-bridge\config.json'
+```
+
+**验证**：
+
+```powershell
+# 直接打 SnowLuma 扩展 action（应 200 + data）
+POST http://127.0.0.1:3000/get_qzone_msg_list  {"num":2}
+Authorization: Bearer <config.json 的 snowluma.accessToken>
+```
+
+实测返回 `{"status":"ok","data":{"total":1,"msglist":[…]}}`；修复后工具读取恢复正常。
+
+**回滚**：恢复 `phone-mcp.js.bak-qzone`。
+
+> ⚠️ 这是**第三方包**的缺陷修复：升级 `ai-companion-kit` / `phone-mcp` 后补丁会丢失，需重新应用。
+> 另外注意 `snowluma.accessToken` 是 OneBot **HTTP** 令牌（不是 WS 令牌）。
 ## 11. 安全与合规
 
 - **白名单优先**：`allowAllWhenEmpty=false` + 显式列出私聊/群；`deny` 优先级更高。
