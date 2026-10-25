@@ -36,6 +36,9 @@ DSH 宿主进程（Electron-as-Node）
 
 桥接通过 `DSH_BASE_URL` 连回宿主；端口每次启动都重新探测，**无需人工同步**。
 
+> 📘 从零部署的完整流程（Node / qq-bridge / SnowLuma / DSH 端 preset 与 MCP / 验收 / 排错 / 源码修改清单）
+> 见 **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**。
+
 ## 前置条件
 
 | 依赖 | 说明 |
