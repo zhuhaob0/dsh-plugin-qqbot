@@ -114,6 +114,25 @@ dsh plugin --profile desktop remove qqbot-supervisor
 }
 ```
 
+## 手机操作（owner-only，可选）
+
+插件认领 qq-bridge 的同时，也会为**手机工具**（`mcp__phone__*`，由 [phone-mcp](https://github.com/) 提供）挂一道 owner 校验：
+
+| 来源 | 能否操作手机 |
+|---|---|
+| owner 的 QQ 私聊（`private:<ownerQQ>`） | ✅ |
+| 白名单里其他 QQ 的私聊 | ❌ |
+| 任何群聊 | ❌ |
+| DSH 桌面会话 | ✅ |
+
+判定依据是 `ownerQQ`，**不是 `allow.private` 里有没有这个号**。实现方式：读桥接的
+`state/sessions.json`（QQ 会话 ↔ DSH 会话 ID 映射）反查调用方身份，非 owner 直接拒绝。
+
+> 这一层是「可见但拒绝」。更严格的同一份校验也在 `qq-tool-restrict.mjs` 里（随 QQ 会话加载，
+> 不依赖本插件），两边都在时以更严的一侧为准。
+
+前置：需要自行安装 [phone-mcp](https://github.com/) 与 Android `platform-tools`，并在 profile 的
+`cordis.patch.yml` 里挂 `@deepseek-ai/dsh-mcp-client`。详见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。
 ## 生命周期
 
 **启动顺序**（`apply()` → `ensure()`）：

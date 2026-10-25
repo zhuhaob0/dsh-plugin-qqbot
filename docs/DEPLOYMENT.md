@@ -277,6 +277,79 @@ dsh plugin --profile desktop add E:\Code\dsh-plugin-qqbot
 
 ---
 
+## 7.5（可选）接入手机操控 —— 仅 owner 私聊可用
+
+让机器人「看见」并操作一台安卓手机：截图、UI dump、点按、滑动、输入、打开 App、跑宏。
+
+### 7.5.1 准备
+
+```powershell
+# 1) adb（platform-tools）
+Invoke-WebRequest 'https://dl.google.com/android/repository/platform-tools-latest-windows.zip' -OutFile "$env:TEMP\pt.zip"
+Expand-Archive "$env:TEMP\pt.zip" -DestinationPath 'D:\dev_tools\'    # → D:\dev_tools\platform-tools\adb.exe
+
+# 2) phone-mcp（MCP server，封装 34 个手机工具）
+cd <phone-mcp 目录>          # 例如 ai-companion-kit\packages\phone-mcp
+npm install
+
+# 3) 手机：设置 → 开发者选项 → 无线调试（或 USB 调试），授权本机
+adb devices                   # 状态应为 device，不是 unauthorized
+```
+
+### 7.5.2 挂进 DSH（profile 的 `cordis.patch.yml`）
+
+```yaml
+- insert:
+    - id: mcp-phone
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: phone
+        transport: stdio
+        command: 'D:\dev_tools\Nodejs\node.exe'
+        args:
+          - '<phone-mcp 目录>\src\phone-mcp.js'
+        env:
+          PHONE_ADB: 'D:\dev_tools\platform-tools\adb.exe'
+        toolCallTimeoutMs: 120000
+```
+
+### 7.5.3 打开 QQ 侧通道 + owner 闸门（两处源码，见第 10 节）
+
+1. `qq-tool-restrict.mjs` 的 `SAFE_PREFIXES` 加入 `'mcp__phone__'`（放行前缀）
+2. 同一文件的 `phoneToolDenial()` 按会话身份收一道：**只有 `private:<ownerQQ>` 放行**
+3. `qq-chat-v2.patch.yml` 提示词加「管理员私聊例外」（否则模型会按旧规则回答“我没有本地工具”）
+
+> 只做第 1 步等于**对白名单里所有人开放手机**——第 2 步是必须的，且默认拒绝（查不到身份就拒）。
+
+### 7.5.4 权限矩阵
+
+| 来源 | 手机工具 |
+|---|---|
+| `private:<ownerQQ>` | ✅ |
+| 其他 QQ 的私聊 | ❌ |
+| 任何群聊 | ❌ |
+| DSH 桌面会话 | ✅ |
+
+判据是 `ownerQQ`（`config.json`），与 `allow.private` 里列了谁无关。
+
+### 7.5.5 验证
+
+让 owner 在私聊里说「打开微信看看有没有新消息」，然后看插件日志：
+
+```
+手机工具调用: name=mcp__phone__phone_open_app sid=session-… key=private:2621072338 owner=2621072338
+```
+
+`key` 对得上即身份识别正常；`key=-` 说明会话 ID 没解析到，需要检查 `state/sessions.json`。
+
+离线单元验证（不需要手机）也可做：用真实的两个会话 ID 调 guard，owner 放行、群聊拒绝。
+
+### 7.5.6 注意事项
+
+- **`setup-dsh.mjs` 可能覆盖 preset 提示词**：重跑后要检查第 10.4 节的修改是否还在
+- **敏感操作一律人工确认**：支付、密码、验证码、转账、退款不要交给模型
+- **adb 权限极大**：建议用备用机/独立账号；`phone_shell` 等于手机上的 shell
+- 手机工具只在 owner 私聊与桌面会话出现，群里连试都不该试（提示词 + 执行层双层拦截）
 ## 8. 验收清单
 
 | # | 检查项 | 期望 |
@@ -291,6 +364,8 @@ dsh plugin --profile desktop add E:\Code\dsh-plugin-qqbot
 | 8 | QQ 私聊 | 能收到回复 |
 | 9 | 控制台 | 能切模式、看到 token 用量 |
 | 10 |（插件）`qqbot_status` | `state: ready`，含 snowluma 状态 |
+| 11 |（手机）owner 私聊让它开 App | 能打开，日志有 `key=private:<ownerQQ>` |
+| 12 |（手机）群里让它开 App | 拒绝（提示词层先拦，执行层 guard 兜底） |
 
 ---
 
@@ -311,7 +386,7 @@ dsh plugin --profile desktop add E:\Code\dsh-plugin-qqbot
 
 ---
 
-## 10. 对 qq-bridge 源码的修改（共 2 处）
+## 10. 对 qq-bridge 源码的修改（共 4 处）
 
 ### 10.1 `src/bridge.js` — 支持 `DSH_BASE_URL` 环境变量
 
@@ -352,6 +427,36 @@ dsh plugin --profile desktop add E:\Code\dsh-plugin-qqbot
 
 ---
 
+### 10.3 `plugins/qq-agent-presets/qq-tool-restrict.mjs` — 放行手机前缀 + owner 闸门
+
+**改动**：
+
+1. `SAFE_PREFIXES` 增加 `'mcp__phone__'`（否则手机工具在 QQ 会话里一律被白名单拒绝）
+2. 新增 `loadPhoneIdentity()` / `phoneToolDenial()`，并把已有 `ctx.tools.guard()` 改成：
+   白名单通过后，手机工具再过一道身份校验 —— 只有 `private:<ownerQQ>` 放行，查不到身份直接拒绝
+
+**原因**：手机工具是「能操作实机」的高危能力，前缀一放行就等于对白名单里所有人开放。
+把闸门放在这个守卫里（而不是插件里）的好处是：它随 QQ 会话一起加载，
+**桥接进程活着就一定生效**，不依赖 `qqbot-supervisor` 是否在运行。
+
+**fail-closed**：`sessions.json` 里查不到会话 ID、或 `config.json` 没配 `ownerQQ`，一律拒绝。
+
+**回滚**：恢复 `qq-tool-restrict.mjs.bak-owner`（或删掉 `phoneToolDenial` 调用）。
+
+### 10.4 `plugins/qq-agent-presets/presets/qq-chat-v2.patch.yml` — 提示词加「管理员私聊例外」
+
+**改动**：在安全规则第 1 条「你没有本地工具……工具不存在就是不存在」之后补一段例外：
+
+> 若工具表里出现 mcp__phone__* 系列，说明管理员已在私聊会话开放手机操作，可照指令使用；
+> 群聊或其他会话调用会被拒绝，被拒绝时如实说明当前会话没有权限，不要反复重试。
+> 手机操作禁止用于支付、密码、验证码、转账、退款等敏感环节，做到提交或付款前必须停下等管理员确认。
+
+**原因**：只放开白名单不够 —— 模型读到「你没有本地工具」就会直接回答“我伸不出手”，
+哪怕工具已经在工具表里。实测现象：工具可见、会话里有 33 个 `mcp__phone__*`，模型仍拒绝。
+
+**回滚**：恢复 `qq-chat-v2.patch.yml.bak-phone`。
+
+> ⚠️ `node scripts/setup-dsh.mjs <profile>` 会重新生成/覆盖 preset，重跑后需检查 10.3 与 10.4 是否还在。
 ## 11. 安全与合规
 
 - **白名单优先**：`allowAllWhenEmpty=false` + 显式列出私聊/群；`deny` 优先级更高。
