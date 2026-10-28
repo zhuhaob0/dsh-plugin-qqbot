@@ -404,7 +404,7 @@ adb devices                   # 状态应为 device，不是 unauthorized
 
 ---
 
-## 10. 源码修改清单（共 9 处）
+## 10. 源码修改清单（共 10 处）
 
 ### 10.1 `src/bridge.js` — 支持 `DSH_BASE_URL` 环境变量
 
@@ -765,6 +765,39 @@ const commentHitsByUin = new Map()
 可用 `PHONE_QZONE_PER_PERSON_PER_DAY` 覆盖。
 
 **回滚**：恢复 `phone-mcp.js.bak-perperson`。
+### 10.10 `src/bridge.js` + `src/mcp-snowluma-safe.js` — 新增 `qq_send_image`（聊天发图）
+
+**背景**：桥接原本只能发**收藏表情**（`qq_send_sticker` → 只在表情库里查），
+给任意 URL 会报「找不到表情」。模型也因此无法在聊天里发网图。
+
+**改动**：
+
+1. `bridge.js`
+   - `socialV2.tools.sendImage: true`（默认开启）
+   - 新增 `sendImageV2(key, imageUrl, { replyToMessageId, atUserId })`：
+     下载（`safeFetchBuffer`，带 DNS 固定/逐跳校验/大小上限）→ 校验是图片
+     （`looksLikeImageBuffer`）→ 拼 `image` 段 → 走同一个 `sendChain`（保证「先文字后图」）
+   - 新增路由 `POST /api/socialV2/send-image`，复用 `send-sticker` 的全套校验
+     （agent token / 会话范围 / reserved2 模式 / 静默模式）
+   - 独立限流：**每分钟 2 张、每天 30 张**
+2. `mcp-snowluma-safe.js`
+   - flag 映射登记 `qq_send_image: 'sendImage'`（不登记会导致「可见但调用必 403」）
+   - 注册 MCP 工具 `qq_send_image`
+
+**安全约束**：`imageUrl` **只接受 `http(s)://`**，不支持本机文件路径——避免通过
+「发图」把本机任意文件（截图、配置、私钥）传出去。
+
+**验证**：
+
+```powershell
+# 路由已挂载（带控制台令牌时返回参数错误，而不是 404）
+POST http://127.0.0.1:3100/api/socialV2/send-image?token=<console-token>   {}
+→ 400 {"ok":false,"error":"key 和 imageUrl 不能为空"}
+```
+
+**提示词**：新增【发图片（qq_send_image）】小节（什么场景发、频率、不能发本机文件）。
+
+**回滚**：恢复 `bridge.js.bak-image` 与 `mcp-snowluma-safe.js.bak-image`。
 ## 11. 安全与合规
 
 - **白名单优先**：`allowAllWhenEmpty=false` + 显式列出私聊/群；`deny` 优先级更高。
