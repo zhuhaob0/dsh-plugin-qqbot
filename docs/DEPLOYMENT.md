@@ -404,7 +404,7 @@ adb devices                   # 状态应为 device，不是 unauthorized
 
 ---
 
-## 10. 源码修改清单（共 10 处）
+## 10. 源码修改清单（共 11 处）
 
 ### 10.1 `src/bridge.js` — 支持 `DSH_BASE_URL` 环境变量
 
@@ -798,6 +798,41 @@ POST http://127.0.0.1:3100/api/socialV2/send-image?token=<console-token>   {}
 **提示词**：新增【发图片（qq_send_image）】小节（什么场景发、频率、不能发本机文件）。
 
 **回滚**：恢复 `bridge.js.bak-image` 与 `mcp-snowluma-safe.js.bak-image`。
+### 10.11 `src/bridge.js` + `src/mcp-snowluma-safe.js` — 共享记忆（scope="shared"）
+
+**背景**：QQ 里每个会话是独立的 DSH 会话，记忆（`st.memory`）也是**按会话存**的。
+主人和 AI 聊过的背景，别人私聊时 AI 看不到——「带着记忆去和不同人聊天」做不到。
+
+**改动**：
+
+1. `bridge.js`
+   - 共享记忆存 `state/shared-memory.json`（`{ notes: [{category, content, at}] }`，上限 80 条）
+   - `formatSharedMemory()` 拼成一段「【共享记忆（主人留下的背景，所有会话可见）】」，
+     在**每次唤醒的提示词**里自动附带（与 per-会话记忆并列）
+   - 四个记忆接口都支持 `scope`：
+     | 接口 | shared 行为 |
+     |---|---|
+     | `memory-append` | 仅 `private:<ownerQQ>` 可写 |
+     | `memory`（查询） | 所有会话可读 |
+     | `memory-remove` | 仅 owner |
+     | `memory-clear` | 仅 owner |
+2. `mcp-snowluma-safe.js`：四个 `qq_memory_*` 工具都加 `scope: 'self' | 'shared'` 参数
+
+**安全**：写/删/清空都校验调用方是 owner 私聊会话（`isOwnerSessionKey`），
+非 owner 写入返回 403 `共享记忆只能由 owner 私聊写入`。
+
+**验证**（实测通过）：
+
+```
+POST memory-append  {key:'private:<owner>', content:'测试：主人喜欢猫', scope:'shared'}  → ok
+GET  memory?key=private:<另一个人>&scope=shared                                        → 能看到这条
+POST memory-clear   {key:'private:<另一个人>', scope:'shared'}                          → 403 仅 owner
+```
+
+**提示词**：新增【共享记忆（跨会话）】小节（何时写、别写私密细节、自动注入）。
+
+**回滚**：恢复 `bridge.js.bak-shared` 与 `mcp-snowluma-safe.js.bak-shared`，
+并删除 `state/shared-memory.json`。
 ## 11. 安全与合规
 
 - **白名单优先**：`allowAllWhenEmpty=false` + 显式列出私聊/群；`deny` 优先级更高。
