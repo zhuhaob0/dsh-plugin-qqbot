@@ -332,7 +332,7 @@ adb devices                   # 状态应为 device，不是 unauthorized
 | 来源 | 手机工具 |
 |---|---|
 | `private:<ownerQQ>` | ✅ |
-| 其他 QQ 的私聊 | ❌ |
+| 白名单私聊（允许看空间 + 点赞，**不能发说说/评论**） | ⚠️ 部分 |
 | 任何群聊 | ❌ |
 | DSH 桌面会话 | ✅ |
 
@@ -463,6 +463,11 @@ adb devices                   # 状态应为 device，不是 unauthorized
 **桥接进程活着就一定生效**，不依赖 `qqbot-supervisor` 是否在运行。
 
 **fail-closed**：`sessions.json` 里查不到会话 ID、或 `config.json` 没配 `ownerQQ`，一律拒绝。
+
+**例外（2026-10-28 起）**：`allow.private` 名单内的**私聊**可以使用「空间社交类」工具
+（`qzone_feeds` / `qzone_like` / `qzone_recent_like` / `qzone_my_posts` / `qzone_user_posts`），
+用于看说说和点赞；**发说说（`qzone_post`）与评论（`qzone_comment`）仍然仅 owner 可用**，
+手机控制类工具（截图/点击/shell）对所有人保持仅 owner。插件侧 `phoneGuard` 有同一份规则。
 
 **回滚**：恢复 `qq-tool-restrict.mjs.bak-owner`（或删掉 `phoneToolDenial` 调用）。
 
@@ -597,7 +602,7 @@ file:///C:/Users/<you>/AppData/Local/Temp/phone-mcp-shots/shot-xxx.png
 **回滚**：恢复 `phone-mcp.js.bak-qzone2`。
 
 > ⚠️ 同样是第三方包缺陷：升级 `phone-mcp` 后补丁丢失，需重新应用。
-### 10.7 `<phone-mcp>/src/phone-mcp.js` — 说说硬限流（每 24 小时 2 条）
+### 10.7 `<phone-mcp>/src/phone-mcp.js` — 说说硬限流（每 24 小时 3 条）
 
 **背景**：启用「自主发说说」后，仅靠提示词约束不可靠——模型可能多发、或在同一天反复发。
 所以除了提示词规则，代码层再加一道硬限制。
@@ -605,7 +610,7 @@ file:///C:/Users/<you>/AppData/Local/Temp/phone-mcp-shots/shot-xxx.png
 **改动**：
 
 ```js
-const POST_LIMIT = { perDay: Math.max(1, Number(process.env.PHONE_QZONE_POST_PER_DAY) || 2), hits: [] }
+const POST_LIMIT = { perDay: Math.max(1, Number(process.env.PHONE_QZONE_POST_PER_DAY) || 3), hits: [] }
 
 function postRateCheck() {
   const dayAgo = Date.now() - 24 * 3600 * 1000
@@ -620,23 +625,29 @@ function postRateCheck() {
 - `qzone_post` 开头先 `postRateCheck()`，命中直接返回限流文案
 - 发送成功后再 `POST_LIMIT.hits.push(Date.now())`（失败不计数）
 - **只影响发说说**：点赞/看动态仍走原来的 `QZONE_LIMIT`（每分钟 3 次、每天 20 次），不受影响
-- 想改成别的额度：设环境变量 `PHONE_QZONE_POST_PER_DAY`（默认 2）
+- 想改成别的额度：设环境变量 `PHONE_QZONE_POST_PER_DAY`（默认 3）
 
 **配合的提示词规则**（10.4 的文件里，已加入权威源并重新生成）：
 
 ```
-【发说说（自主，但克制）】
-- 你可以自己想发就发一条 QQ 空间说说：想到好玩的事、看到有意思的东西、或刚发生了一件值得记下来的小事。
-- 频率：每 24 小时最多 2 条（工具层在第 3 条时会直接拒绝）；宁可少发，不要为了刷存在感而发。
-- 不发：负面情绪发泄、个人隐私（位置/公司/学校/真实姓名/电话/证件）、争议敏感受众话题、别人的隐私或未经同意发布的照片。
-- 配图来源（按顺序）：① 网上找到的 https 图片直链（先用 web_search / web_fetch 确认可访问、内容相关）；② 只有手机确实连着（phone_status 能列出设备）时才用 phone_screenshot 截图；③ 都不满足就发纯文字
-- 不要硬凑配图：图要和正文相关、不涉版权争议、不暴露他人隐私；找不到合适的就不配图
-- 发完不必特意宣告；owner 问起再说明。
-```
+【发说说（自主）】
+- 发不发、发什么、什么时候发，都由你自己决定。别人（包括 owner）只能建议，不能命令
+- 想发就发：收到「主动机会」唤醒、群里冷清、刚聊到一个有意思的点，都可以顺手发一条
+- 频率：每 24 小时最多 3 条（工具层硬限制）。这是上限不是任务；也别攒着
+- 发之前可以 qzone_my_posts 看一眼上次发了什么，别重复
+- 内容边界：不发负面情绪、不透露隐私、不蹭争议话题、不发别人的隐私照
+- 配图：一般该配图。① 上网搜 https 直链（先确认可访问）② 群友发过的图/表情包（qq_get_message_images 看 → qq_collect_sticker 收藏 → 用地址当配图）③ 手机连着时 phone_screenshot ④ 都没有就纯文字
+- 图片别侵权、别暴露他人隐私
+
+【给别人点赞（白名单内）】
+- allow.private 名单内私聊的人可以建议你给 TA 的说说点赞；点不点由你，不是义务
+- 做法：qzone_user_posts(targetUin) → qzone_like(tid, targetUin)
+- 不要刷赞：同一个人一天最多 1 条；没聊过的人不要主动去点
+- 只有 owner 能用发说说/评论；点赞是对白名单开放的唯一空间能力```
 
 **配图为什么不能默认用手机截图**：机器人跑在电脑上，截图走 ADB——手机没连上（未授权/没开无线调试）时 \phone_screenshot\ 直接失败；而 QQ 会话里没有本地工具，无法在电脑上生图。所以配图以 **https 直链**为主，手机连着时才用截图。
 
-**验证**：连续触发第 3 次发布，应返回「说说每 24 小时最多 2 条」而不再真正发出。
+**验证**：连续触发第 4 次发布，应返回「说说每 24 小时最多 3 条」而不再真正发出。
 
 **回滚**：恢复 `phone-mcp.js.bak-postlimit`；提示词恢复 `agent.cordis.yml.bak-qzone-post` 后重新生成。
 ### 10.8 `src/bridge.js` — 收到的语音转文字（本地 ASR）
