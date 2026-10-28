@@ -404,7 +404,7 @@ adb devices                   # 状态应为 device，不是 unauthorized
 
 ---
 
-## 10. 源码修改清单（共 11 处）
+## 10. 源码修改清单（共 12 处）
 
 ### 10.1 `src/bridge.js` — 支持 `DSH_BASE_URL` 环境变量
 
@@ -833,6 +833,46 @@ POST memory-clear   {key:'private:<另一个人>', scope:'shared'}              
 
 **回滚**：恢复 `bridge.js.bak-shared` 与 `mcp-snowluma-safe.js.bak-shared`，
 并删除 `state/shared-memory.json`。
+### 10.12 `src/bridge.js` + `src/mcp-snowluma-safe.js` — `qq_relay`（owner 让 AI 代发消息）
+
+**背景**：agent token 是**按会话绑定**的（`agentTokenOk(targetKey, token)`），
+所以 AI 拿自己会话的令牌去给别人发消息必然「agent token 无效」。这是有意的会话隔离。
+要做「AI 替主人给别人传话」，必须由桥接提供一条**带身份校验**的特权通道。
+
+**改动**：
+
+1. `bridge.js`
+   - 默认开关 `socialV2.tools.relay: true`
+   - 新增路由 `POST /api/socialV2/relay`，参数 `{ key, targetKey, text }`
+   - 校验顺序：
+     1. `x-agent-token` 必须匹配**调用方自己**的会话（`agentTokenOk(key, token)`）
+     2. 调用方必须是 `private:<ownerQQ>`（`isOwnerSessionKey`）→ 否则 403 `只有 owner 私聊能让 AI 代为传话`
+     3. 仅 `reserved2` 模式可用
+     4. `targetKey` 格式合法且 `modeAllowed`；私聊目标还必须在 `allow.private` 白名单
+     5. `text` ≤ 500 字
+   - 发送复用 `sendMessagesV2`（与正常发消息同一条 sendChain，顺序一致）
+2. `mcp-snowluma-safe.js`：登记 flag `qq_relay: 'relay'` 并注册工具
+
+**限流**（`relayRateCheck`）：
+
+| 维度 | 上限 |
+|---|---|
+| 对同一个目标 | 3 条 / 24 小时 |
+| 全局 | 10 条 / 24 小时 |
+| 间隔 | 至少 60 秒 |
+
+**验证**（实测）：
+
+```
+缺 token / 假 token → 403 agent token 无效（必须使用调用方自己会话的令牌）
+```
+
+真正的成功路径只能在 owner 会话里验证（它持有该会话的 token）。
+
+**提示词**：新增【替主人传话（qq_relay）】小节——只有 owner 明确要求才传、
+先确认送谁说什么、限额、撤不回、别假装知道对方回复。
+
+**回滚**：恢复 `bridge.js.bak-relay` 与 `mcp-snowluma-safe.js.bak-relay`。
 ## 11. 安全与合规
 
 - **白名单优先**：`allowAllWhenEmpty=false` + 显式列出私聊/群；`deny` 优先级更高。
