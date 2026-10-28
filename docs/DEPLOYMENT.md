@@ -332,7 +332,7 @@ adb devices                   # 状态应为 device，不是 unauthorized
 | 来源 | 手机工具 |
 |---|---|
 | `private:<ownerQQ>` | ✅ |
-| 白名单私聊（允许看空间 + 点赞，**不能发说说/评论**） | ⚠️ 部分 |
+| 白名单私聊（可看空间 + 点赞 + 评论；**不能发说说、不能控制手机**） | ⚠️ 部分 |
 | 任何群聊 | ❌ |
 | DSH 桌面会话 | ✅ |
 
@@ -404,7 +404,7 @@ adb devices                   # 状态应为 device，不是 unauthorized
 
 ---
 
-## 10. 源码修改清单（共 8 处）
+## 10. 源码修改清单（共 9 处）
 
 ### 10.1 `src/bridge.js` — 支持 `DSH_BASE_URL` 环境变量
 
@@ -464,10 +464,15 @@ adb devices                   # 状态应为 device，不是 unauthorized
 
 **fail-closed**：`sessions.json` 里查不到会话 ID、或 `config.json` 没配 `ownerQQ`，一律拒绝。
 
-**例外（2026-10-28 起）**：`allow.private` 名单内的**私聊**可以使用「空间社交类」工具
-（`qzone_feeds` / `qzone_like` / `qzone_recent_like` / `qzone_my_posts` / `qzone_user_posts`），
-用于看说说和点赞；**发说说（`qzone_post`）与评论（`qzone_comment`）仍然仅 owner 可用**，
-手机控制类工具（截图/点击/shell）对所有人保持仅 owner。插件侧 `phoneGuard` 有同一份规则。
+**例外（2026-10-28 起）**：`allow.private` 名单内的**私聊**可以使用「空间社交类」工具：
+
+- 看：`qzone_feeds` / `qzone_my_posts` / `qzone_user_posts` / `qzone_recent_like`
+- 互动：`qzone_like`（点赞）、`qzone_comment`（评论）
+
+**仍然仅 owner**：`qzone_post`（发说说）、以及全部手机控制类工具（截图/点击/输入/shell）。
+插件侧 `phoneGuard` 有同一份规则。
+
+按人限流见 10.9：对同一个人每 24 小时最多点赞 5 条、评论 5 条。
 
 **回滚**：恢复 `qq-tool-restrict.mjs.bak-owner`（或删掉 `phoneToolDenial` 调用）。
 
@@ -738,6 +743,28 @@ python -X utf8 py\transcribe.py test.wav --model-dir <模型目录> --json
 推理约 **1.2 秒/条**（模型加载 1 秒，之后常驻）。
 
 **回滚**：恢复 `bridge.js.bak-ptt2`，并在 config.json 关掉 `transcribeIncoming`。
+### 10.9 `<phone-mcp>/src/phone-mcp.js` — 点赞/评论的「按人」每日上限
+
+**背景**：全局限流（`QZONE_LIMIT` 每分钟 3 次 / 每天 20 次、`COMMENT_LIMIT`）挡不住
+「逮着同一个人刷」——设成 5 条/天也没用，因为计数是全局的。
+
+**改动**：
+
+```js
+const PER_PERSON_DAY = Math.max(1, Number(process.env.PHONE_QZONE_PER_PERSON_PER_DAY) || 5)
+const likeHitsByUin = new Map()
+const commentHitsByUin = new Map()
+```
+
+- `qzone_like` / `qzone_comment` 在全局检查之后，再按 `targetUin` 做一次 24 小时滚动窗口检查
+- 成功后 `perPersonCommit(map, targetUin)` 计入
+- **没传 `targetUin` 时退化为全局限流**（不额外拦）
+- 全局评论上限从每天 10 提到 30，给「多人各 5 条」留空间（每 10 分钟仍限 2 条，防刷屏）
+
+**额度**：对同一个人 24 小时内最多 **点赞 5 条、评论 5 条**；
+可用 `PHONE_QZONE_PER_PERSON_PER_DAY` 覆盖。
+
+**回滚**：恢复 `phone-mcp.js.bak-perperson`。
 ## 11. 安全与合规
 
 - **白名单优先**：`allowAllWhenEmpty=false` + 显式列出私聊/群；`deny` 优先级更高。
