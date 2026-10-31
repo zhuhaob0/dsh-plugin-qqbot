@@ -234,3 +234,20 @@ npm pack --dry-run      # 检查打包内容（files 白名单）
 ## License
 
 MIT
+
+## 适配 qqbridge-v2（2026-10-31）
+
+桥接已从 `qq-bridge` 重写为 `qqbridge-v2`，本插件同步支持：
+
+| 配置 | 默认值 | 说明 |
+|---|---|---|
+| `bridgeDir` | `E:\Code\qqbridge-v2` | 桥接目录 |
+| `bridgeScript` | `src/index.js` | 入口脚本（v1 是 `src/bridge.js`） |
+| `bridgeArgs` | `["--config","config.json"]` | v2 需要显式指定配置 |
+| `logFile` | `state/v2.out.log` | v2 的日志文件名与 v1 不同 |
+
+启动时插件会把 `DSH_BASE_URL` 注入子进程环境；v2 会用它覆盖
+`config.json` 里的 `agent.baseUrl`（DSH 每次启动端口会变，否则冷启动连不上）。
+
+v1 如需回退：把上面四项改回
+`D:\Software\QQBot\qq-bridge` / `src/bridge.js` / `[]` / `state/bridge.log`。
